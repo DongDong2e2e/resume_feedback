@@ -1,0 +1,33 @@
+# --- AI & LangChain Core ---
+langchain
+langchain-core
+langchain-community
+langchain-google-genai
+langchain-huggingface
+langchain-ollama
+faiss-cpu # [수정] 설치가 용이한 CPU 버전으로 변경 (핵심 성능은 GPU가 담당)
+sentence-transformers # HuggingFaceEmbeddings에 필요
+
+# --- LLM & API ---
+google-ai-generativelanguage
+ollama
+python-dotenv
+
+# --- Web UI ---
+gradio
+
+# --- Data Handling & File I/O ---
+unstructured # 다양한 파일(pdf, docx 등) 로드를 위한 핵심 라이브러리
+pdfminer.six
+python-docx
+pypdf
+# unstructured가 필요로 하는 추가 라이브러리 (명시적으로 설치 권장)
+unstructured-inference 
+unstructured.pytesseract
+pdf2image
+pikepdf 
+
+# --- Utilities ---
+ddgs # 웹 검색 기능
+nltk # 텍스트 처리에 필요
+tqdm # 진행률 표시
