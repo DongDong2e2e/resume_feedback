@@ -1,0 +1,18 @@
+# API keys and environment variables
+.env
+
+# Vector store database
+faiss_index/
+
+# Python cache
+__pycache__/
+*.pyc
+
+# User-specific data
+/1_Resumes_and_CVs/
+/2_Job_Postings_and_JD/
+/3_Company_and_Industry_Research/
+/4_Technical_Notes_and_Study/
+/5_Web_Search_Cache/
+
+/.gradio/
