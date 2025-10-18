@@ -260,6 +260,39 @@ def manual_save_button_handler(file_path_relative, content):
     return status_message, gr.Dropdown(choices=get_md_files(), value=file_path_relative)
 
 
+def save_results_to_file(report, eval_md, itemized_md, rewrite_md, company, job_title):
+    """생성된 리포트와 피드백을 하나의 마크다운 파일로 저장합니다."""
+    if not any([report, eval_md, itemized_md, rewrite_md]):
+        gr.Info("저장할 내용이 없습니다.")
+        return
+
+    from datetime import datetime
+    
+    # 저장할 폴더 생성
+    save_dir = "6_Consulting_Results"
+    os.makedirs(save_dir, exist_ok=True)
+    
+    # 파일명 생성
+    today_str = datetime.now().strftime('%Y%m%d')
+    safe_company = "".join(c for c in company if c.isalnum())
+    safe_job = "".join(c for c in job_title if c.isalnum())
+    filename = f"[{today_str}]_{safe_company}_{safe_job}_컨설팅결과.md"
+    filepath = os.path.join(save_dir, filename)
+
+    # 저장할 내용 조합
+    full_content = f"# {company} - {job_title} AI 컨설팅 결과\n\n"
+    full_content += f"## 사전 브리핑 리포트\n\n---\n{report}\n\n"
+    full_content += f"## 종합 분석\n\n---\n{eval_md}\n\n"
+    full_content += f"## 항목별 상세 피드백\n\n---\n{itemized_md}\n\n"
+    full_content += f"## AI 추천 수정본\n\n---\n{rewrite_md}\n\n"
+    
+    try:
+        with open(filepath, 'w', encoding='utf-8') as f:
+            f.write(full_content)
+        gr.Info(f"'{filepath}'에 성공적으로 저장했습니다.")
+    except Exception as e:
+        gr.Warning(f"파일 저장 중 오류 발생: {e}")
+
 # --- [수정] Gradio 인터페이스 함수 ---
 def report_and_feedback_interface(company_name, job_title, job_description, my_draft):
     if not all([company_name, job_title, job_description, my_draft]):
@@ -268,7 +301,7 @@ def report_and_feedback_interface(company_name, job_title, job_description, my_d
         raise gr.Error("벡터 저장소가 비어있습니다. 자료를 추가하고 DB를 다시 만들어주세요.")
 
     # 4개의 출력 컴포넌트(리포트, 종합분석, 항목별, 전체수정)에 대한 초기 상태
-    yield "...", "...", "...", "...", gr.update(visible=False), [], "", gr.Button(value="생성 중...", interactive=False)
+    yield "...", "...", "...", "...", gr.update(visible=False), [], "", gr.Button(value="생성 중...", interactive=False), gr.update(visible=False)
     
     initial_context = f"회사명: {company_name}\n직무명: {job_title}"
     response_generator = generate_report_and_feedback(VECTOR_STORE, job_description, my_draft, company_name, job_title)
@@ -278,7 +311,7 @@ def report_and_feedback_interface(company_name, job_title, job_description, my_d
         final_report = response_data["report"]
         final_feedback_json_str = response_data["feedback"]
         # 스트리밍 중에는 원본 응답을 임시로 표시
-        yield final_report, final_feedback_json_str, "...", "...", gr.update(visible=False), [], initial_context, gr.Button(value="생성 중...", interactive=False)
+        yield final_report, final_feedback_json_str, "...", "...", gr.update(visible=False), [], initial_context, gr.Button(value="생성 중...", interactive=False), gr.update(visible=False)
 
     # 최종 JSON을 파싱하여 3개의 Markdown으로 분리하는 로직
     overall_eval_md = "### 📊 종합 분석\n\n분석 내용을 생성하지 못했습니다."
@@ -327,8 +360,7 @@ def report_and_feedback_interface(company_name, job_title, job_description, my_d
 
     initial_chat_history = [{'role': 'assistant', 'content': f"{company_name} {job_title} 직무 리포트입니다. 궁금한 점을 질문해주세요!"}]
     # 최종적으로 파싱된 3개의 Markdown을 각각의 출력 컴포넌트로 전달
-    yield final_report, overall_eval_md, itemized_md, rewrite_md, gr.update(visible=True), initial_chat_history, initial_context, gr.Button(value="리포트 및 피드백 받기", interactive=True)
-
+    yield final_report, overall_eval_md, itemized_md, rewrite_md, gr.update(visible=True), initial_chat_history, initial_context, gr.Button(value="리포트 및 피드백 받기", interactive=True), gr.update(visible=True)
 
 def handle_chat_submission(question, history, initial_context):
     if VECTOR_STORE is None:
@@ -375,6 +407,9 @@ with gr.Blocks(theme=gr.themes.Soft()) as demo:
                     with gr.TabItem("전체 수정 제안"):
                         output_rewrite = gr.Markdown(label="AI 추천 수정본")
             
+            # [추가] 결과 저장 버튼
+            save_result_btn = gr.Button("결과 파일로 저장하기", visible=False)
+
             with gr.Column(visible=False) as chat_interface:
                 gr.Markdown("---")
                 gr.Markdown("### 추가 질문하기")
@@ -386,7 +421,14 @@ with gr.Blocks(theme=gr.themes.Soft()) as demo:
             submit_btn.click(
                 fn=report_and_feedback_interface,
                 inputs=[company_input, job_title_input, jd_input, draft_input],
-                outputs=[output_report, output_eval, output_itemized, output_rewrite, chat_interface, chat_history, initial_context_state, submit_btn]
+                outputs=[output_report, output_eval, output_itemized, output_rewrite, chat_interface, chat_history, initial_context_state, submit_btn, save_result_btn]
+            )
+
+            # [추가] 저장 버튼 클릭 이벤트 핸들러
+            save_result_btn.click(
+                fn=save_results_to_file,
+                inputs=[output_report, output_eval, output_itemized, output_rewrite, company_input, job_title_input],
+                outputs=None
             )
             
             chat_input.submit(fn=handle_chat_submission, inputs=[chat_input, chat_history, initial_context_state], outputs=[chatbot, chat_input])
@@ -426,6 +468,25 @@ with gr.Blocks(theme=gr.themes.Soft()) as demo:
             file_dropdown.change(fn=read_file_content, inputs=file_dropdown, outputs=file_content_box)
             save_file_btn.click(fn=manual_save_button_handler, inputs=[file_dropdown, file_content_box], outputs=[status_box, file_dropdown])
 
+def check_ollama_connection():
+    """앱 시작 시 Ollama 서버와의 연결을 확인합니다."""
+    try:
+        import ollama
+        # timeout을 짧게 설정하여 응답이 없을 때 오래 기다리지 않도록 함
+        ollama.list(timeout=2) 
+        print("✅ Ollama 서버와 성공적으로 연결되었습니다.")
+        return True
+    except Exception as e:
+        print("\n" + "="*50)
+        print("❌ 경고: Ollama 서버에 연결할 수 없습니다.")
+        print("   Ollama가 설치되어 있고 실행 중인지 확인해주세요.")
+        print(f"   오류 상세: {e}")
+        print("="*50 + "\n")
+        # Gradio 앱 자체는 실행되도록 하되, 경고를 명확히 표시
+        gr.Warning("Ollama 서버에 연결할 수 없습니다. 로컬 모델 기능이 작동하지 않을 수 있습니다.")
+        return False
+
 if __name__ == "__main__":
+    check_ollama_connection() # Gradio 앱 실행 전 연결 확인
     print("Gradio 앱을 시작합니다. 웹 브라우저에서 다음 주소로 접속하세요.")
     demo.launch()

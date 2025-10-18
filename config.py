@@ -24,6 +24,20 @@ GEMINI_FLASH_MODEL_NAME = "gemini-2.5-flash" # 새로운 Flash 모델
 OLLAMA_MODEL_NAME = "hf.co/Liontix/Qwen3-8B-Gemini-2.5-Pro-Distill-GGUF:Q4_K_M" # 로컬에서 사용하는 Ollama 모델
 OLLAMA_BASE_URL = "http://127.0.0.1:11434"
 
+# --- 폴백(Fallback) 모델 순서 ---
+# 일반 호출용 모델 목록
+NORMAL_MODELS_FALLBACK_ORDER = [
+    "gemini_pro_normal", 
+    "gemini_flash_normal", 
+    "ollama_normal"
+]
+# 스트리밍 호출용 모델 목록
+STREAM_MODELS_FALLBACK_ORDER = [
+    "gemini_pro_stream", 
+    "gemini_flash_stream", 
+    "ollama_stream"
+]
+
 # --- 임베딩 모델 설정 ---
 # 벡터화를 위해 사용할 모델 (Ollama)
 # EMBEDDING_MODEL_NAME = "nomic-embed-text" # Ollama에서 사용하는 임베딩 모델

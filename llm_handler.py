@@ -39,6 +39,16 @@ llm_gemini_flash_stream = ChatGoogleGenerativeAI(
 )
 llm_ollama_stream = ChatOllama(model=OLLAMA_MODEL_NAME, base_url=OLLAMA_BASE_URL, temperature=0.0, streaming=True)
 
+# 모든 LLM 인스턴스를 딕셔너리로 관리
+ALL_LLMS = {
+    "gemini_pro_normal": llm_gemini_pro_normal,
+    "gemini_flash_normal": llm_gemini_flash_normal,
+    "ollama_normal": llm_ollama_normal,
+    "gemini_pro_stream": llm_gemini_pro_stream,
+    "gemini_flash_stream": llm_gemini_flash_stream,
+    "ollama_stream": llm_ollama_stream,
+}
+
 # --- 폴백(Fallback) 로직 ---
 def invoke_with_fallback(prompt, inputs, models, stream=False):
     """

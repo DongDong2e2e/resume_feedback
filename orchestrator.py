@@ -9,7 +9,9 @@ from ddgs import DDGS
 
 # [핵심] 분리된 모듈에서 프롬프트와 LLM 핸들러를 가져옵니다.
 from prompts import *
-from llm_handler import *
+from llm_handler import invoke_with_fallback, ALL_LLMS # ALL_LLMS 임포트
+from config import NORMAL_MODELS_FALLBACK_ORDER, STREAM_MODELS_FALLBACK_ORDER # config에서 목록 임포트
+
 
 WEB_SEARCH_CACHE = {}
 
@@ -36,8 +38,9 @@ def generate_report_and_feedback(vector_store, jd_text, draft_text, company_name
     print("\n[Orchestrator] 리포트 및 피드백 생성 프로세스 시작.")
     start_time = time.time()
     
-    normal_models = [llm_gemini_pro_normal, llm_gemini_flash_normal, llm_ollama_normal]
-    stream_models = [llm_gemini_pro_stream, llm_gemini_flash_stream, llm_ollama_stream]
+    # config에서 가져온 이름 목록을 실제 llm 인스턴스로 변환
+    normal_models = [ALL_LLMS[name] for name in NORMAL_MODELS_FALLBACK_ORDER]
+    stream_models = [ALL_LLMS[name] for name in STREAM_MODELS_FALLBACK_ORDER]
 
     report = ""
     try:
@@ -47,13 +50,21 @@ def generate_report_and_feedback(vector_store, jd_text, draft_text, company_name
         retrieval_query = f"{company_name} {job_title} 직무 지원"
         relevant_docs = retriever.invoke(retrieval_query)
         context_text = "\n\n---\n\n".join([doc.page_content for doc in relevant_docs])
+    except Exception as e:
+        yield {"report": f"### ❌ 오류 (1단계: 내부 자료 검색)\n\n{e}", "feedback": "", "done": True}
+        return
 
+    try:
         # --- 2단계: 사전 브리핑 리포트 생성 ---
         yield {"report": "### ⏳ 2/4: 사전 브리핑 리포트 생성 중...", "feedback": "", "done": False}
         briefing_inputs = {"company": company_name, "job_title": job_title, "context": context_text}
         report_models = [llm_gemini_flash_normal, llm_ollama_normal]
         report, report_model = invoke_with_fallback(briefing_prompt, briefing_inputs, report_models)
-        
+    except Exception as e:
+        yield {"report": f"### ❌ 오류 (2단계: 리포트 생성)\n\n{e}", "feedback": "", "done": True}
+        return
+
+    try:
         # --- 3단계: 웹 리서치 및 최종 피드백 준비 ---
         feedback = "### ⏳ 3/4: 최신 외부 정보 검색 및 요약 중..."
         yield {"report": f"✅ **사전 브리핑 리포트 (by {report_model})**\n\n---\n{report}", "feedback": feedback, "done": False}
@@ -85,7 +96,11 @@ def generate_report_and_feedback(vector_store, jd_text, draft_text, company_name
         
         summary_inputs = {"web_results": web_results}
         research_summary, _ = invoke_with_fallback(summary_prompt, summary_inputs, [llm_ollama_normal])
+    except Exception as e:
+        yield {"report": f"### ❌ 오류 (3단계: 웹 리서치)\n\n{e}", "feedback": "", "done": True}
+        return
 
+    try:
         # --- 4단계: 최종 피드백 스트리밍 (Chained Prompt & MCP) ---
         feedback = "### ⏳ 4/4: 최종 피드백 생성 및 자가 교정 중..."
         yield {"report": f"✅ **사전 브리핑 리포트 (by {report_model})**\n\n---\n{report}", "feedback": feedback, "done": False}
@@ -102,31 +117,32 @@ def generate_report_and_feedback(vector_store, jd_text, draft_text, company_name
         }
         evaluation_report, _ = invoke_with_fallback(evaluation_prompt, evaluation_inputs, normal_models)
 
-        # 3. 종합 및 수정 제안
+        # 3. 종합 및 수정 제안 (이 단계의 결과가 '피드백 초안'이 됨)
         synthesis_inputs = {
             "analysis_report": analysis_report,
             "evaluation_report": evaluation_report,
             "draft": draft_text
         }
-        synthesis_report, draft_model = invoke_with_fallback(synthesis_prompt, synthesis_inputs, normal_models)
+        # 'synthesis_report'는 이제 JSON 형식의 문자열 초안입니다.
+        draft_feedback_json, draft_model = invoke_with_fallback(synthesis_prompt, synthesis_inputs, normal_models)
 
-        # 4. 최종 피드백 초안 조합
-        draft_feedback = f"{synthesis_report}\n\n{evaluation_report}"
-
-        # 5. 품질 검수 및 최종본 생성 (기존 MCP 로직과 동일)
-        critique, _ = invoke_with_fallback(critique_prompt, {"draft_feedback": draft_feedback}, normal_models)
+        # 4. 품질 검수 및 최종본 생성
+        # [수정] draft_feedback_json을 critique_prompt에 직접 전달
+        critique, _ = invoke_with_fallback(critique_prompt, {"draft_feedback_json": draft_feedback_json}, normal_models)
 
         final_model = draft_model
-        
+
         if critique.strip() == "문제 없음":
             print(f"\n[MCP] 초안이 완벽하여, '{draft_model}' 모델의 결과로 바로 스트리밍합니다.")
-            resolver_stream = iter(draft_feedback)
+            # [수정] 이미 완성된 JSON이므로 그대로 스트리밍
+            resolver_stream = iter(draft_feedback_json) 
         else:
             print("\n[MCP] 비판 내용을 바탕으로 최종본 생성 및 스트리밍 시작...")
-            # original_request에 모든 단계의 입력을 포함
-            original_request_inputs = {**analysis_inputs, **evaluation_inputs, **synthesis_inputs}
+            # [수정] resolver_prompt에 draft_feedback 대신 draft_feedback_json을 전달
             resolver_inputs = {
-                "original_request": str(original_request_inputs), "draft_feedback": draft_feedback, "critique": critique
+                "original_request": f"Analysis: {analysis_report}\n\nEvaluation: {evaluation_report}",
+                "draft_feedback_json": draft_feedback_json, 
+                "critique": critique
             }
             resolver_stream, final_model = invoke_with_fallback(resolver_prompt, resolver_inputs, stream_models, stream=True)
 
@@ -139,7 +155,6 @@ def generate_report_and_feedback(vector_store, jd_text, draft_text, company_name
         duration = end_time - start_time
         final_info = f"\n\n---\n**모델:** {final_model} | **소요 시간:** {duration:.2f}초"
         yield {"report": f"✅ **사전 브리핑 리포트 (by {report_model})**\n\n---\n{report}", "feedback": full_feedback_response + final_info, "done": True}
-
     except Exception as e:
         error_message = f"\n\n---\n**오류:** 피드백 생성 중 심각한 오류가 발생했습니다. - {e}"
         yield {"report": report, "feedback": error_message, "done": True}
@@ -170,7 +185,7 @@ def get_follow_up(question, chat_history, vector_store, initial_context):
     }
 
     # 4. 스트리밍 폴백 모델로 답변 생성
-    stream_models = [llm_gemini_pro_stream, llm_gemini_flash_stream, llm_ollama_stream]
+    stream_models = [ALL_LLMS[name] for name in STREAM_MODELS_FALLBACK_ORDER]
     
     try:
         response_stream, model_name = invoke_with_fallback(conversational_prompt, inputs, stream_models, stream=True)
