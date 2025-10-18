@@ -216,10 +216,6 @@ def handle_file_upload(files, file_context, progress=gr.Progress(track_tqdm=True
     processed_files = []
     total_files = len(files)
     
-    if not file_context and total_files > 0:
-        print("공통 주제가 없어 첫 파일 기준으로 AI 추천 주제를 사용합니다.")
-        _, file_context = suggest_topic_from_file([files[0]])
-
     for i, file_obj in enumerate(files):
         try:
             progress(i / total_files, desc=f"({i+1}/{total_files}) '{os.path.basename(file_obj.name)}' 처리 중...")
@@ -227,14 +223,21 @@ def handle_file_upload(files, file_context, progress=gr.Progress(track_tqdm=True
             loader = UnstructuredFileLoader(file_obj.name)
             raw_text = loader.load()[0].page_content
             
-            current_context = file_context
-            if not current_context:
+            # [수정] 루프 안에서 각 파일에 맞는 컨텍스트를 결정합니다.
+            current_context = file_context 
+            
+            # 사용자가 공통 주제를 입력하지 않은 경우에만, 각 파일별로 주제를 다시 추천받습니다.
+            if not file_context: 
+                print(f" -> '{os.path.basename(file_obj.name)}' 파일의 개별 주제를 생성합니다.")
                 suggestion_prompt = ChatPromptTemplate.from_template(TOPIC_SUGGESTION_PROMPT_TEMPLATE)
                 suggestion_chain = suggestion_prompt | llm_gemini_flash_normal | StrOutputParser()
-                current_context = suggestion_chain.invoke({"raw_text": raw_text})
+                # [수정] current_context가 아닌 별도의 변수로 받아 혼동 방지
+                individual_topic = suggestion_chain.invoke({"raw_text": raw_text})
+                current_context = individual_topic.strip()
 
             converter_prompt = ChatPromptTemplate.from_template(PDF_CONVERTER_PROMPT_TEMPLATE)
             converter_chain = converter_prompt | llm_gemini_flash_normal | StrOutputParser()
+            # [수정] file_context 대신 결정된 current_context를 사용합니다.
             llm_output = converter_chain.invoke({"file_context": current_context, "raw_text": raw_text})
 
             lines = llm_output.strip().split('\n')
