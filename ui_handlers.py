@@ -16,14 +16,13 @@ from llm_handler import llm_gemini_flash_normal
 from prompts import PDF_CONVERTER_PROMPT_TEMPLATE, TOPIC_SUGGESTION_PROMPT_TEMPLATE
 from orchestrator import generate_report_and_feedback, get_follow_up
 from config import BASE_DIR, DATA_DIRS, AI_GENERATED_NOTES_PATH
-from data_loader import load_documents, split_documents
-from vector_store_manager import create_and_save_vector_store
+from data_loader import load_documents, create_parent_document_retriever
+from langchain_community.vectorstores import FAISS
 
 # --- 유틸리티 함수 ---
 def get_md_files():
     """[수정] DATA_DIRS에 지정된 폴더 내의 모든 .md 파일을 찾아서 반환합니다."""
     md_files = []
-    # [수정] data_loader.py와 동일한 제외 로직을 일부 적용 (UI 표시용) 
     exclude_patterns = ["**/01_Working_Drafts/**"]
     
     for data_dir in DATA_DIRS:
@@ -31,14 +30,12 @@ def get_md_files():
         if os.path.isdir(dir_path):
             files_in_dir = glob.glob(os.path.join(dir_path, "**/*.md"), recursive=True)
             
-            # 제외 패턴 적용
             excluded_files = set()
             for pattern in exclude_patterns:
                 excluded_files.update(glob.glob(os.path.join(dir_path, pattern), recursive=True))
             
             valid_files = [f for f in files_in_dir if f not in excluded_files]
 
-            # 경로를 BASE_DIR 기준으로 상대 경로로 변경
             for f in valid_files:
                 md_files.append(os.path.relpath(f, BASE_DIR))
                 
@@ -79,32 +76,33 @@ def save_file_content(file_path_relative, content):
     except Exception as e:
         raise gr.Error(f"파일 저장 중 오류 발생: {e}")
 
-# --- 벡터 저장소 핵심 로직 ---
-def _rebuild_store_core(vector_store_path, embeddings):
-    print("벡터 DB 재생성을 시작합니다...")
-    all_documents = load_documents()
-    if not all_documents:
-        print("경고: 문서를 찾을 수 없어 벡터 DB를 생성할 수 없습니다.")
-        return None 
-    doc_chunks = split_documents(all_documents)
-    vector_store = create_and_save_vector_store(doc_chunks, vector_store_path, embeddings)
-    print("벡터 DB 재생성 완료.")
-    return vector_store
+# --- Retriever 핵심 로직 ---
+def _rebuild_retriever_core(embeddings):
+    print("Retriever 재생성을 시작합니다...")
+    documents = load_documents()
+    if not documents:
+        print("경고: 문서를 찾을 수 없어 Retriever를 생성할 수 없습니다.")
+        return None
+    
+    vectorstore = FAISS.from_texts(texts=[""], embedding=embeddings)
+    
+    retriever = create_parent_document_retriever(vectorstore, documents)
+    print("Retriever 재생성 완료.")
+    return retriever
 
-def rebuild_vector_db_for_ui(vector_store_path, embeddings, VECTOR_STORE):
-    """(복원) UI용 벡터 DB 새로고침 함수, 전역 변수 사용"""
+def rebuild_retriever_for_ui(embeddings):
+    """UI용 Retriever 새로고침 함수. 새로운 Retriever 객체를 반환합니다."""
     try:
-        VECTOR_STORE = _rebuild_store_core(vector_store_path, embeddings)
-        if VECTOR_STORE is None:
-            return "벡터 DB 생성 중 오류가 발생했습니다. 터미널 로그를 확인해주세요."
-        return "벡터 데이터베이스가 성공적으로 업데이트되었습니다."
+        new_retriever = _rebuild_retriever_core(embeddings)
+        if new_retriever is None:
+            return "Retriever 생성 중 오류가 발생했습니다.", None
+        return "Retriever가 성공적으로 업데이트되었습니다.", new_retriever
     except Exception as e:
-        print(f"벡터 DB 재생성 중 오류 발생: {e}")
-        raise gr.Error(f"벡터 DB 업데이트 실패: {e}")
+        print(f"Retriever 재생성 중 오류 발생: {e}")
+        raise gr.Error(f"Retriever 업데이트 실패: {e}")
 
 # --- AI 기반 자료 자동화 핸들러 ---
 def suggest_topic_from_file(files, progress=gr.Progress()):
-    """파일 객체 목록을 받아 파일명 목록을 표시하고, 첫 번째 파일로 주제를 추천합니다."""
     if not files:
         return "", ""
 
@@ -125,7 +123,7 @@ def suggest_topic_from_file(files, progress=gr.Progress()):
         gr.Warning(f"주제 추천 중 오류 발생: {e}")
         return filenames, ""
 
-def handle_file_upload(files, file_context, vector_store_path, embeddings, progress=gr.Progress(track_tqdm=True)):
+def handle_file_upload(files, file_context, embeddings, progress=gr.Progress(track_tqdm=True)):
     if not files:
         raise gr.Error("분석할 파일을 먼저 업로드해주세요.")
 
@@ -181,17 +179,19 @@ def handle_file_upload(files, file_context, vector_store_path, embeddings, progr
     if not processed_files:
         raise gr.Error("모든 파일 처리 중 오류가 발생했습니다.")
 
-    progress(1.0, desc="벡터 DB에 반영 중입니다...")
-    rebuild_status = rebuild_vector_db_for_ui(vector_store_path, embeddings, None) # VECTOR_STORE is not available here
+    progress(1.0, desc="Retriever에 반영 중입니다...")
+    rebuild_status, new_retriever = rebuild_retriever_for_ui(embeddings)
+    
     final_message = f"총 {len(processed_files)}개 파일의 노트 생성을 완료했습니다.\n{rebuild_status}"
-    return final_message, gr.Dropdown(choices=get_md_files(), value=os.path.join(os.path.basename(AI_GENERATED_NOTES_PATH), processed_files[-1]))
+    
+    dropdown_value = os.path.join(os.path.basename(AI_GENERATED_NOTES_PATH), processed_files[-1]) if processed_files else None
+    return final_message, gr.Dropdown(choices=get_md_files(), value=dropdown_value), new_retriever
 
 def manual_save_button_handler(file_path_relative, content):
     status_message = save_file_content(file_path_relative, content)
     return status_message, gr.Dropdown(choices=get_md_files(), value=file_path_relative)
 
 def save_results_to_file(report, eval_md, itemized_md, rewrite_md, company, job_title):
-    """생성된 리포트와 피드백을 하나의 마크다운 파일로 저장합니다."""
     if not any([report, eval_md, itemized_md, rewrite_md]):
         gr.Info("저장할 내용이 없습니다.")
         return
@@ -208,14 +208,10 @@ def save_results_to_file(report, eval_md, itemized_md, rewrite_md, company, job_
     filepath = os.path.join(save_dir, filename)
 
     full_content = f"# {company} - {job_title} AI 컨설팅 결과\n\n"
-    full_content += f"## 사전 브리핑 리포트\n\n---
-{report}\n\n"
-    full_content += f"## 종합 분석\n\n---
-{eval_md}\n\n"
-    full_content += f"## 항목별 상세 피드백\n\n---
-{itemized_md}\n\n"
-    full_content += f"## AI 추천 수정본\n\n---
-{rewrite_md}\n\n"
+    full_content += f"## 사전 브리핑 리포트\n\n---\n{report}\n\n"
+    full_content += f"## 종합 분석\n\n---\n{eval_md}\n\n"
+    full_content += f"## 항목별 상세 피드백\n\n---\n{itemized_md}\n\n"
+    full_content += f"## AI 추천 수정본\n\n---\n{rewrite_md}\n\n"
     
     try:
         with open(filepath, 'w', encoding='utf-8') as f:
@@ -224,16 +220,16 @@ def save_results_to_file(report, eval_md, itemized_md, rewrite_md, company, job_
     except Exception as e:
         gr.Warning(f"파일 저장 중 오류 발생: {e}")
 
-def report_and_feedback_interface(company_name, job_title, job_description, my_draft, vector_store):
+def report_and_feedback_interface(company_name, job_title, job_description, my_draft, retriever):
     if not all([company_name, job_title, job_description, my_draft]):
         raise gr.Error("모든 필드를 입력해주세요.")
-    if not vector_store:
-        raise gr.Error("벡터 저장소가 비어있습니다. 자료를 추가하고 DB를 다시 만들어주세요.")
+    if not retriever:
+        raise gr.Error("Retriever가 비어있습니다. 자료를 추가하고 DB를 다시 만들어주세요.")
 
     yield "...", "...", "...", "...", gr.update(visible=False), [], "", gr.Button(value="생성 중...", interactive=False), gr.update(visible=False)
     
     initial_context = f"회사명: {company_name}\n직무명: {job_title}"
-    response_generator = generate_report_and_feedback(vector_store, job_description, my_draft, company_name, job_title)
+    response_generator = generate_report_and_feedback(retriever, job_description, my_draft, company_name, job_title)
 
     final_report, final_feedback_json_str = "", ""
     for response_data in response_generator:
@@ -285,12 +281,12 @@ def report_and_feedback_interface(company_name, job_title, job_description, my_d
     initial_chat_history = [{'role': 'assistant', 'content': f"{company_name} {job_title} 직무 리포트입니다. 궁금한 점을 질문해주세요!"}]
     yield final_report, overall_eval_md, itemized_md, rewrite_md, gr.update(visible=True), initial_chat_history, initial_context, gr.Button(value="리포트 및 피드백 받기", interactive=True), gr.update(visible=True)
 
-def handle_chat_submission(question, history, initial_context, vector_store):
-    if vector_store is None:
-        raise gr.Error("오류: 벡터 저장소가 초기화되지 않았습니다.")
+def handle_chat_submission(question, history, initial_context, retriever):
+    if retriever is None:
+        raise gr.Error("오류: Retriever가 초기화되지 않았습니다.")
     
     history.append({"role": "user", "content": question})
-    response_stream = get_follow_up(question, history, vector_store, initial_context)
+    response_stream = get_follow_up(question, history, retriever, initial_context)
     
     bot_message = ""
     history.append({"role": "assistant", "content": ""})

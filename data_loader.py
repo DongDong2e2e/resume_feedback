@@ -2,6 +2,9 @@
 
 from langchain_community.document_loaders import DirectoryLoader, UnstructuredMarkdownLoader
 from langchain_text_splitters import RecursiveCharacterTextSplitter
+from langchain.retrievers import ParentDocumentRetriever
+from langchain.storage import InMemoryStore
+from langchain_community.vectorstores import FAISS
 from langchain_core.documents import Document # Document 클래스를 임포트합니다.
 import os
 import re
@@ -105,12 +108,21 @@ def load_documents():
     print("모든 문서의 메타데이터 파싱을 완료했습니다.")
     return documents
 
-def split_documents(documents):
-    """불러온 문서를 청크 단위로 분할합니다."""
-    text_splitter = RecursiveCharacterTextSplitter(
-        chunk_size=1500,  # 청크 크기
-        chunk_overlap=200   # 청크 간 겹치는 글자 수
+def create_parent_document_retriever(vectorstore, documents):
+    """ParentDocumentRetriever를 생성하고 문서를 추가합니다."""
+    parent_splitter = RecursiveCharacterTextSplitter(chunk_size=2000)
+    child_splitter = RecursiveCharacterTextSplitter(chunk_size=400)
+    store = InMemoryStore()
+
+    retriever = ParentDocumentRetriever(
+        vectorstore=vectorstore,
+        docstore=store,
+        child_splitter=child_splitter,
+        parent_splitter=parent_splitter,
     )
-    splitted_docs = text_splitter.split_documents(documents)
-    print(f"문서를 총 {len(splitted_docs)}개의 청크로 분할했습니다.")
-    return splitted_docs
+    
+    print("ParentDocumentRetriever에 문서를 추가합니다...")
+    retriever.add_documents(documents)
+    print("문서 추가 완료.")
+    
+    return retriever

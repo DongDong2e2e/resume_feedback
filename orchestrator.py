@@ -69,7 +69,7 @@ query_expansion_prompt = ChatPromptTemplate.from_template(query_expansion_prompt
 
 
 # --- 메인 오케스트레이터 함수 ---
-def generate_report_and_feedback(vector_store, jd_text, draft_text, company_name, job_title):
+def generate_report_and_feedback(retriever, jd_text, draft_text, company_name, job_title):
     """
     RAG 검색 -> 브리핑 리포트 생성 -> 웹 검색 -> 최종 피드백 생성을 순차적으로 수행하는 제너레이터
     """
@@ -85,15 +85,6 @@ def generate_report_and_feedback(vector_store, jd_text, draft_text, company_name
         # --- 1단계: 내부 데이터(RAG) 수집 ---
         yield {"report": "### ⏳ 1/4: 관련 내부 자료 검색 중...", "feedback": "", "done": False}
         
-        # [수정] SelfQueryRetriever를 생성합니다.
-        retriever = SelfQueryRetriever.from_llm(
-            llm=llm_gemini_flash_normal, # LLM이 쿼리를 분석하여 필터를 생성
-            vectorstore=vector_store,
-            document_contents=document_content_description,
-            metadata_field_info=metadata_field_info,
-            verbose=True # 어떤 필터가 생성되는지 터미널에서 확인 가능
-        )
-
         original_query = f"{company_name} {job_title} 직무 지원 관련 정보"
 
         # [추가] 쿼리 확장 로직
@@ -106,7 +97,7 @@ def generate_report_and_feedback(vector_store, jd_text, draft_text, company_name
         # [수정] 확장된 모든 쿼리로 문서를 검색하고 중복을 제거합니다.
         relevant_docs_set = {}
         for query in all_queries:
-            docs = retriever.invoke(query) # retriever는 SelfQueryRetriever 또는 일반 retriever
+            docs = retriever.invoke(query) # retriever는 이제 ParentDocumentRetriever
             for doc in docs:
                 # 소스 경로를 키로 사용하여 중복 문서 방지
                 relevant_docs_set[doc.metadata['source']] = doc
@@ -226,7 +217,7 @@ def generate_report_and_feedback(vector_store, jd_text, draft_text, company_name
 
 
 # --- 후속 질문 처리 함수 ---
-def get_follow_up(question, chat_history, vector_store, initial_context):
+def get_follow_up(question, chat_history, retriever, initial_context):
     """대화 기록과 초기 컨텍스트를 바탕으로 후속 질문에 답변합니다."""
     print(f"\n[Follow-up Handler] 후속 질문 처리 시작: \"{question}\"\n")
     
@@ -237,7 +228,6 @@ def get_follow_up(question, chat_history, vector_store, initial_context):
         history_str += f"{role}: {message['content']}\n"
 
     # 2. 새로운 질문과 대화 맥락을 기반으로 관련 문서 다시 검색
-    retriever = vector_store.as_retriever(search_kwargs={'k': 3})
     retrieval_query = f"초기 컨텍스트: {initial_context}\n\n대화 기록: {history_str}\n\n사용자의 질문: {question}"
     relevant_docs = retriever.invoke(retrieval_query)
     context_text = "\n\n---\n\n".join([doc.page_content for doc in relevant_docs])

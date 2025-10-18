@@ -2,17 +2,14 @@
 
 import gradio as gr
 import ui_handlers
-import os
 
-def create_ui(vector_store_instance, vector_store_path, embeddings):
+def create_ui(retriever_state, embeddings):
     with gr.Blocks(theme=gr.themes.Soft()) as demo:
         gr.Markdown("# 🤖 나만의 AI 취업 컨설턴트")
         
-        # State 객체들
         chat_history = gr.State([])
         initial_context_state = gr.State("")
         
-        # UI 레이아웃 정의 (기존 app.py의 UI 코드와 동일)
         with gr.Tabs():
             with gr.TabItem("AI 컨설턴트"):
                 gr.Markdown("과거 지원 데이터와 최신 정보를 종합하여, 지원서에 대한 '사전 브리핑 리포트'와 '상세 피드백'을 제공합니다.")
@@ -46,8 +43,8 @@ def create_ui(vector_store_instance, vector_store_path, embeddings):
                     chat_submit_btn = gr.Button("전송", variant="primary")
                 
                 submit_btn.click(
-                    fn=lambda c, j, jd, d: ui_handlers.report_and_feedback_interface(c, j, jd, d, vector_store_instance),
-                    inputs=[company_input, job_title_input, jd_input, draft_input],
+                    fn=ui_handlers.report_and_feedback_interface,
+                    inputs=[company_input, job_title_input, jd_input, draft_input, retriever_state],
                     outputs=[output_report, output_eval, output_itemized, output_rewrite, chat_interface, chat_history, initial_context_state, submit_btn, save_result_btn]
                 )
 
@@ -57,14 +54,22 @@ def create_ui(vector_store_instance, vector_store_path, embeddings):
                     outputs=None
                 )
                 
-                chat_input.submit(fn=lambda q, h, i: ui_handlers.handle_chat_submission(q, h, i, vector_store_instance), inputs=[chat_input, chat_history, initial_context_state], outputs=[chatbot, chat_input])
-                chat_submit_btn.click(fn=lambda q, h, i: ui_handlers.handle_chat_submission(q, h, i, vector_store_instance), inputs=[chat_input, chat_history, initial_context_state], outputs=[chatbot, chat_input])
+                chat_input.submit(
+                    fn=ui_handlers.handle_chat_submission,
+                    inputs=[chat_input, chat_history, initial_context_state, retriever_state], 
+                    outputs=[chatbot, chat_input]
+                )
+                chat_submit_btn.click(
+                    fn=ui_handlers.handle_chat_submission,
+                    inputs=[chat_input, chat_history, initial_context_state, retriever_state], 
+                    outputs=[chatbot, chat_input]
+                )
 
             with gr.TabItem("자료 관리"):
                 gr.Markdown("AI가 학습할 문서를 관리합니다. 파일을 업로드하면 AI가 분석하여 '지능형 분석 노트'를 자동으로 생성합니다.")
                 
                 status_box = gr.Textbox(label="상태", interactive=False)
-                rebuild_db_btn = gr.Button("벡터 DB 다시 만들기", variant="stop")
+                rebuild_retriever_btn = gr.Button("Retriever 다시 만들기", variant="stop")
                 
                 gr.Markdown("---")
                 gr.Markdown("### AI 기반 자료 자동 정리")
@@ -87,9 +92,18 @@ def create_ui(vector_store_instance, vector_store_path, embeddings):
                 file_content_box = gr.Textbox(label="파일 내용", lines=25, interactive=True)
                 save_file_btn = gr.Button("수정된 내용 저장", variant="primary")
 
-                rebuild_db_btn.click(fn=lambda: ui_handlers.rebuild_vector_db_for_ui(vector_store_path, embeddings, vector_store_instance), inputs=[], outputs=status_box)
-                file_upload_btn.upload(fn=ui_handlers.suggest_topic_from_file, inputs=file_upload_btn, outputs=[uploaded_file_display, file_context_input])
-                process_file_btn.click(fn=lambda files, context: ui_handlers.handle_file_upload(files, context, vector_store_path, embeddings), inputs=[file_upload_btn, file_context_input], outputs=[status_box, file_dropdown])
+                rebuild_retriever_btn.click(
+                    fn=lambda: ui_handlers.rebuild_retriever_for_ui(embeddings),
+                    inputs=[], 
+                    outputs=[status_box, retriever_state] 
+                )
+
+                process_file_btn.click(
+                    fn=lambda files, context: ui_handlers.handle_file_upload(files, context, embeddings),
+                    inputs=[file_upload_btn, file_context_input],
+                    outputs=[status_box, file_dropdown, retriever_state] 
+                )
+
                 file_dropdown.change(fn=ui_handlers.read_file_content, inputs=file_dropdown, outputs=file_content_box)
                 save_file_btn.click(fn=ui_handlers.manual_save_button_handler, inputs=[file_dropdown, file_content_box], outputs=[status_box, file_dropdown])
                 

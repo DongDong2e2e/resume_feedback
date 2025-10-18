@@ -12,10 +12,10 @@ import nltk
 import torch
 
 from langchain_huggingface import HuggingFaceEmbeddings
+from langchain_community.vectorstores import FAISS
 from config import VECTOR_STORE_PATH, OLLAMA_BASE_URL
-from vector_store_manager import load_vector_store
+from data_loader import load_documents, create_parent_document_retriever
 from ui_layout import create_ui
-from ui_handlers import _rebuild_store_core
 
 # --- NLTK 데이터 자동 설치 로직 ---
 def setup_nltk():
@@ -51,14 +51,17 @@ def get_optimal_device():
     print(" -> 최적 장치 감지: CPU")
     return 'cpu'
 
-def initialize_vector_store(vector_store_path, embeddings):
-    print("벡터 저장소 초기화를 시작합니다...")
-    vector_store = load_vector_store(vector_store_path, embeddings)
-    if vector_store is None:
-        print(f"'{vector_store_path}'에서 벡터 저장소를 찾을 수 없습니다. 새로 생성합니다.")
-        vector_store = _rebuild_store_core(vector_store_path, embeddings)
-    print("벡터 저장소 준비 완료.")
-    return vector_store
+def initialize_retriever(embeddings):
+    print("Retriever 초기화를 시작합니다...")
+    documents = load_documents()
+    
+    # Create an empty FAISS vector store
+    vectorstore = FAISS.from_texts(texts=[""], embedding=embeddings)
+    
+    retriever = create_parent_document_retriever(vectorstore, documents)
+    print("Retriever 준비 완료.")
+    return retriever
+
 
 def check_ollama_connection():
     """앱 시작 시 Ollama 서버와의 연결을 확인합니다."""
@@ -99,12 +102,14 @@ if __name__ == "__main__":
         encode_kwargs={'normalize_embeddings': True}
     )
 
-    VECTOR_STORE = initialize_vector_store(VECTOR_STORE_PATH, EMBEDDINGS)
+    RETRIEVER = initialize_retriever(EMBEDDINGS)
 
     # --- 2. UI 생성 및 실행 ---
     check_ollama_connection() # Gradio 앱 실행 전 연결 확인
     
-    demo = create_ui(VECTOR_STORE, VECTOR_STORE_PATH, EMBEDDINGS)
+    retriever_state = gr.State(RETRIEVER)
+    
+    demo = create_ui(retriever_state, EMBEDDINGS)
     
     print("Gradio 앱을 시작합니다. 웹 브라우저에서 다음 주소로 접속하세요.")
     demo.launch()
