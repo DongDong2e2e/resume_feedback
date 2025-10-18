@@ -7,6 +7,7 @@ langchain-huggingface
 langchain-ollama
 faiss-cpu # [수정] 설치가 용이한 CPU 버전으로 변경 (핵심 성능은 GPU가 담당)
 sentence-transformers # HuggingFaceEmbeddings에 필요
+torch # GPU/MPS 장치 감지를 위해 명시적으로 추가
 
 # --- LLM & API ---
 google-ai-generativelanguage

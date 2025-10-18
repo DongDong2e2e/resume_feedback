@@ -31,16 +31,9 @@ def create_and_save_vector_store(chunks, path, embeddings, batch_size=32):
                 time.sleep(0.1)
 
         print("\n -> 3단계: 최종 벡터 저장소 저장 중...")
-        original_cwd = os.getcwd()
-        parent_dir = os.path.dirname(path)
-        index_name = os.path.basename(path)
-        
-        try:
-            os.chdir(parent_dir)
-            vectorstore.save_local(index_name)
-            print(f"벡터 저장소를 '{path}'에 성공적으로 생성하고 저장했습니다.")
-        finally:
-            os.chdir(original_cwd)
+        os.makedirs(path, exist_ok=True)  # 디렉토리가 없으면 생성
+        vectorstore.save_local(path)
+        print(f"벡터 저장소를 '{path}'에 성공적으로 생성하고 저장했습니다.")
             
         return vectorstore
 
@@ -56,16 +49,7 @@ def load_vector_store(path, embeddings):
     if not os.path.exists(os.path.join(path, "index.faiss")):
         return None
     
-    original_cwd = os.getcwd()
-    parent_dir = os.path.dirname(path)
-    index_name = os.path.basename(path)
-    
-    vectorstore = None
-    try:
-        os.chdir(parent_dir)
-        vectorstore = FAISS.load_local(index_name, embeddings, allow_dangerous_deserialization=True)
-        print(f"'{path}'에서 벡터 저장소를 불러왔습니다.")
-    finally:
-        os.chdir(original_cwd)
+    vectorstore = FAISS.load_local(path, embeddings, allow_dangerous_deserialization=True)
+    print(f"'{path}'에서 벡터 저장소를 불러왔습니다.")
         
     return vectorstore
