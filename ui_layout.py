@@ -56,7 +56,7 @@ def create_ui(retriever_state, embeddings):
                 )
 
                 source_documents_list.change(
-                    fn=ui_handlers.read_file_content,
+                    fn=ui_handlers.read_source_content_from_selection,
                     inputs=source_documents_list,
                     outputs=source_document_content
                 )

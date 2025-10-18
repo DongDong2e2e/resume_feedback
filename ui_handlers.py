@@ -5,6 +5,7 @@ import os
 import sys
 import json
 import re
+import re
 import glob
 from datetime import datetime
 
@@ -56,6 +57,18 @@ def read_file_content(file_path_relative):
         raise gr.Error("파일을 찾을 수 없습니다.")
     except Exception as e:
         raise gr.Error(f"파일을 읽는 중 오류 발생: {e}")
+
+def read_source_content_from_selection(selected_source):
+    """ "[N] path/to/file.md" 형식의 문자열에서 실제 경로만 추출하여 내용을 읽습니다. """
+    if not selected_source:
+        return ""
+    
+    match = re.search(r'\]\s*(.*)', selected_source)
+    if match:
+        file_path_relative = match.group(1)
+        return read_file_content(file_path_relative)
+    
+    return read_file_content(selected_source)
 
 def save_file_content(file_path_relative, content):
     """[수정] BASE_DIR 기준의 상대 경로를 받아 파일을 저장합니다."""
