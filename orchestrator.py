@@ -13,7 +13,7 @@ from langchain_core.output_parsers import StrOutputParser
 # [핵심] 분리된 모듈에서 프롬프트와 LLM 핸들러를 가져옵니다.
 from prompts import *
 from llm_handler import invoke_with_fallback, ALL_LLMS, llm_gemini_flash_normal # ALL_LLMS 임포트
-from config import NORMAL_MODELS_FALLBACK_ORDER, STREAM_MODELS_FALLBACK_ORDER # config에서 목록 임포트
+from config import NORMAL_MODELS_FALLBACK_ORDER, STREAM_MODELS_FALLBACK_ORDER, BASE_DIR # config에서 목록 임포트
 
 
 WEB_SEARCH_CACHE = {}
@@ -76,54 +76,48 @@ def generate_report_and_feedback(retriever, jd_text, draft_text, company_name, j
     print("\n[Orchestrator] 리포트 및 피드백 생성 프로세스 시작.")
     start_time = time.time()
     
-    # config에서 가져온 이름 목록을 실제 llm 인스턴스로 변환
     normal_models = [ALL_LLMS[name] for name in NORMAL_MODELS_FALLBACK_ORDER]
     stream_models = [ALL_LLMS[name] for name in STREAM_MODELS_FALLBACK_ORDER]
 
     report = ""
+    source_paths = []
     try:
-        # --- 1단계: 내부 데이터(RAG) 수집 ---
-        yield {"report": "### ⏳ 1/4: 관련 내부 자료 검색 중...", "feedback": "", "done": False}
+        yield {"report": "### ⏳ 1/4: 관련 내부 자료 검색 중...", "feedback": "", "sources": [], "done": False}
         
         original_query = f"{company_name} {job_title} 직무 지원 관련 정보"
-
-        # [추가] 쿼리 확장 로직
         print(" -> 쿼리 확장 시도...")
         query_expansion_chain = query_expansion_prompt | llm_gemini_flash_normal | StrOutputParser()
         expanded_queries_str = query_expansion_chain.invoke({"original_query": original_query})
         all_queries = [original_query] + expanded_queries_str.strip().split('\n')
         print(f" -> 생성된 쿼리: {all_queries}")
 
-        # [수정] 확장된 모든 쿼리로 문서를 검색하고 중복을 제거합니다.
         relevant_docs_set = {}
         for query in all_queries:
-            docs = retriever.invoke(query) # retriever는 이제 ParentDocumentRetriever
+            docs = retriever.invoke(query)
             for doc in docs:
-                # 소스 경로를 키로 사용하여 중복 문서 방지
                 relevant_docs_set[doc.metadata['source']] = doc
         
         relevant_docs = list(relevant_docs_set.values())
         print(f" -> 최종적으로 {len(relevant_docs)}개의 고유한 문서를 찾았습니다.")
 
+        source_paths = [os.path.relpath(doc.metadata['source'], BASE_DIR) for doc in relevant_docs]
         context_text = "\n\n---\n\n".join([doc.page_content for doc in relevant_docs])
     except Exception as e:
-        yield {"report": f"### ❌ 오류 (1단계: 내부 자료 검색)\n\n{e}", "feedback": "", "done": True}
+        yield {"report": f"### ❌ 오류 (1단계: 내부 자료 검색)\n\n{e}", "feedback": "", "sources": [], "done": True}
         return
 
     try:
-        # --- 2단계: 사전 브리핑 리포트 생성 ---
-        yield {"report": "### ⏳ 2/4: 사전 브리핑 리포트 생성 중...", "feedback": "", "done": False}
+        yield {"report": "### ⏳ 2/4: 사전 브리핑 리포트 생성 중...", "feedback": "", "sources": source_paths, "done": False}
         briefing_inputs = {"company": company_name, "job_title": job_title, "context": context_text}
-        report_models = [llm_gemini_flash_normal, llm_ollama_normal]
+        report_models = [llm_gemini_flash_normal, ALL_LLMS['ollama_normal']]
         report, report_model = invoke_with_fallback(briefing_prompt, briefing_inputs, report_models)
     except Exception as e:
-        yield {"report": f"### ❌ 오류 (2단계: 리포트 생성)\n\n{e}", "feedback": "", "done": True}
+        yield {"report": f"### ❌ 오류 (2단계: 리포트 생성)\n\n{e}", "feedback": "", "sources": source_paths, "done": True}
         return
 
     try:
-        # --- 3단계: 웹 리서치 및 최종 피드백 준비 ---
         feedback = "### ⏳ 3/4: 최신 외부 정보 검색 및 요약 중..."
-        yield {"report": f"✅ **사전 브리핑 리포트 (by {report_model})**\n\n---\n{report}", "feedback": feedback, "done": False}
+        yield {"report": f"✅ **사전 브리핑 리포트 (by {report_model})**\n\n---\n{report}", "feedback": feedback, "sources": source_paths, "done": False}
         
         research_inputs = {"company": company_name, "job_title": job_title, "jd": jd_text}
         raw_keyword_output, _ = invoke_with_fallback(research_prompt, research_inputs, normal_models)
@@ -151,21 +145,18 @@ def generate_report_and_feedback(retriever, jd_text, draft_text, company_name, j
         save_search_results_to_markdown(company_name, job_title, web_results)
         
         summary_inputs = {"web_results": web_results}
-        research_summary, _ = invoke_with_fallback(summary_prompt, summary_inputs, [llm_ollama_normal])
+        research_summary, _ = invoke_with_fallback(summary_prompt, summary_inputs, [ALL_LLMS['ollama_normal']])
     except Exception as e:
-        yield {"report": f"### ❌ 오류 (3단계: 웹 리서치)\n\n{e}", "feedback": "", "done": True}
+        yield {"report": f"### ❌ 오류 (3단계: 웹 리서치)\n\n{e}", "feedback": "", "sources": source_paths, "done": True}
         return
 
     try:
-        # --- 4단계: 최종 피드백 스트리밍 (Chained Prompt & MCP) ---
         feedback = "### ⏳ 4/4: 최종 피드백 생성 및 자가 교정 중..."
-        yield {"report": f"✅ **사전 브리핑 리포트 (by {report_model})**\n\n---\n{report}", "feedback": feedback, "done": False}
+        yield {"report": f"✅ **사전 브리핑 리포트 (by {report_model})**\n\n---\n{report}", "feedback": feedback, "sources": source_paths, "done": False}
 
-        # 1. 분석 및 근거 추출
         analysis_inputs = {"context": context_text, "draft": draft_text}
         analysis_report, _ = invoke_with_fallback(analysis_prompt, analysis_inputs, normal_models)
 
-        # 2. 다중 관점 평가
         evaluation_inputs = {
             "analysis_report": analysis_report, 
             "research_summary": research_summary, 
@@ -173,28 +164,22 @@ def generate_report_and_feedback(retriever, jd_text, draft_text, company_name, j
         }
         evaluation_report, _ = invoke_with_fallback(evaluation_prompt, evaluation_inputs, normal_models)
 
-        # 3. 종합 및 수정 제안 (이 단계의 결과가 '피드백 초안'이 됨)
         synthesis_inputs = {
             "analysis_report": analysis_report,
             "evaluation_report": evaluation_report,
             "draft": draft_text
         }
-        # 'synthesis_report'는 이제 JSON 형식의 문자열 초안입니다.
         draft_feedback_json, draft_model = invoke_with_fallback(synthesis_prompt, synthesis_inputs, normal_models)
 
-        # 4. 품질 검수 및 최종본 생성
-        # [수정] draft_feedback_json을 critique_prompt에 직접 전달
         critique, _ = invoke_with_fallback(critique_prompt, {"draft_feedback_json": draft_feedback_json}, normal_models)
 
         final_model = draft_model
 
         if critique.strip() == "문제 없음":
             print(f"\n[MCP] 초안이 완벽하여, '{draft_model}' 모델의 결과로 바로 스트리밍합니다.")
-            # [수정] 이미 완성된 JSON이므로 그대로 스트리밍
             resolver_stream = iter(draft_feedback_json) 
         else:
             print("\n[MCP] 비판 내용을 바탕으로 최종본 생성 및 스트리밍 시작...")
-            # [수정] resolver_prompt에 draft_feedback 대신 draft_feedback_json을 전달
             resolver_inputs = {
                 "original_request": f"Analysis: {analysis_report}\n\nEvaluation: {evaluation_report}",
                 "draft_feedback_json": draft_feedback_json, 
@@ -205,15 +190,15 @@ def generate_report_and_feedback(retriever, jd_text, draft_text, company_name, j
         full_feedback_response = ""
         for chunk in resolver_stream:
             full_feedback_response += chunk
-            yield {"report": f"✅ **사전 브리핑 리포트 (by {report_model})**\n\n---\n{report}", "feedback": full_feedback_response, "done": False}
+            yield {"report": f"✅ **사전 브리핑 리포트 (by {report_model})**\n\n---\n{report}", "feedback": full_feedback_response, "sources": source_paths, "done": False}
 
         end_time = time.time()
         duration = end_time - start_time
         final_info = f"\n\n---\n**모델:** {final_model} | **소요 시간:** {duration:.2f}초"
-        yield {"report": f"✅ **사전 브리핑 리포트 (by {report_model})**\n\n---\n{report}", "feedback": full_feedback_response + final_info, "done": True}
+        yield {"report": f"✅ **사전 브리핑 리포트 (by {report_model})**\n\n---\n{report}", "feedback": full_feedback_response + final_info, "sources": source_paths, "done": True}
     except Exception as e:
         error_message = f"\n\n---\n**오류:** 피드백 생성 중 심각한 오류가 발생했습니다. - {e}"
-        yield {"report": report, "feedback": error_message, "done": True}
+        yield {"report": report, "feedback": error_message, "sources": source_paths, "done": True}
 
 
 # --- 후속 질문 처리 함수 ---

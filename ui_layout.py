@@ -33,6 +33,13 @@ def create_ui(retriever_state, embeddings):
                         with gr.TabItem("전체 수정 제안"):
                             output_rewrite = gr.Markdown(label="AI 추천 수정본")
                 
+                with gr.Accordion("AI가 참고한 자료 목록 (클릭하여 펼치기)", open=False):
+                    source_documents_list = gr.Radio(
+                        label="참고 문서 목록",
+                        info="문서를 선택하면 아래에 전체 내용이 표시됩니다."
+                    )
+                    source_document_content = gr.Markdown(label="문서 전체 내용 보기")
+                
                 save_result_btn = gr.Button("결과 파일로 저장하기", visible=False)
 
                 with gr.Column(visible=False) as chat_interface:
@@ -45,7 +52,13 @@ def create_ui(retriever_state, embeddings):
                 submit_btn.click(
                     fn=ui_handlers.report_and_feedback_interface,
                     inputs=[company_input, job_title_input, jd_input, draft_input, retriever_state],
-                    outputs=[output_report, output_eval, output_itemized, output_rewrite, chat_interface, chat_history, initial_context_state, submit_btn, save_result_btn]
+                    outputs=[output_report, output_eval, output_itemized, output_rewrite, chat_interface, chat_history, initial_context_state, submit_btn, save_result_btn, source_documents_list]
+                )
+
+                source_documents_list.change(
+                    fn=ui_handlers.read_file_content,
+                    inputs=source_documents_list,
+                    outputs=source_document_content
                 )
 
                 save_result_btn.click(

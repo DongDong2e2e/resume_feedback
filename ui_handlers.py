@@ -226,16 +226,19 @@ def report_and_feedback_interface(company_name, job_title, job_description, my_d
     if not retriever:
         raise gr.Error("Retriever가 비어있습니다. 자료를 추가하고 DB를 다시 만들어주세요.")
 
-    yield "...", "...", "...", "...", gr.update(visible=False), [], "", gr.Button(value="생성 중...", interactive=False), gr.update(visible=False)
+    yield "...", "...", "...", "...", gr.update(visible=False), [], "", gr.Button(value="생성 중...", interactive=False), gr.update(visible=False), gr.update(choices=[], value=None)
     
     initial_context = f"회사명: {company_name}\n직무명: {job_title}"
     response_generator = generate_report_and_feedback(retriever, job_description, my_draft, company_name, job_title)
 
     final_report, final_feedback_json_str = "", ""
+    final_sources = []
     for response_data in response_generator:
         final_report = response_data["report"]
         final_feedback_json_str = response_data["feedback"]
-        yield final_report, final_feedback_json_str, "...", "...", gr.update(visible=False), [], initial_context, gr.Button(value="생성 중...", interactive=False), gr.update(visible=False)
+        final_sources = response_data["sources"]
+
+        yield final_report, final_feedback_json_str, "...", "...", gr.update(visible=False), [], initial_context, gr.Button(value="생성 중...", interactive=False), gr.update(visible=False), gr.update(choices=final_sources, value=None)
 
     overall_eval_md = "### 📊 종합 분석\n\n분석 내용을 생성하지 못했습니다."
     itemized_md = "### ✍️ 항목별 상세 피드백\n\n피드백을 생성하지 못했습니다."
@@ -279,7 +282,7 @@ def report_and_feedback_interface(company_name, job_title, job_description, my_d
         rewrite_md = error_message
 
     initial_chat_history = [{'role': 'assistant', 'content': f"{company_name} {job_title} 직무 리포트입니다. 궁금한 점을 질문해주세요!"}]
-    yield final_report, overall_eval_md, itemized_md, rewrite_md, gr.update(visible=True), initial_chat_history, initial_context, gr.Button(value="리포트 및 피드백 받기", interactive=True), gr.update(visible=True)
+    yield final_report, overall_eval_md, itemized_md, rewrite_md, gr.update(visible=True), initial_chat_history, initial_context, gr.Button(value="리포트 및 피드백 받기", interactive=True), gr.update(visible=True), gr.update(choices=final_sources, value=None)
 
 def handle_chat_submission(question, history, initial_context, retriever):
     if retriever is None:
