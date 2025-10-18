@@ -1,7 +1,7 @@
 # data_loader.py
 
 from langchain_community.document_loaders import DirectoryLoader, UnstructuredMarkdownLoader
-from langchain.text_splitter import RecursiveCharacterTextSplitter
+from langchain_text_splitters import RecursiveCharacterTextSplitter
 from langchain_core.documents import Document # Document 클래스를 임포트합니다.
 import os
 import re

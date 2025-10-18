@@ -33,14 +33,30 @@ if OLLAMA_BASE_URL:
 from llm_handler import llm_gemini_flash_normal
 from prompts import PDF_CONVERTER_PROMPT_TEMPLATE, TOPIC_SUGGESTION_PROMPT_TEMPLATE
 from langchain_community.document_loaders import UnstructuredFileLoader
-from langchain.prompts import ChatPromptTemplate
+from langchain_core.prompts import ChatPromptTemplate
 from langchain_core.output_parsers import StrOutputParser
 
 
-print("전역 임베딩 모델로 HuggingFace 모델(Granite-Embedding-278m)을 생성합니다.")
+import torch # PyTorch 라이브러리를 임포트합니다.
+
+# --- [수정] 실행 환경에 맞춰 Embedding 장치를 자동으로 선택하는 로직 ---
+def get_optimal_device():
+    """실행 환경에 맞는 최적의 Pytorch 장치(device)를 감지하여 반환합니다."""
+    if torch.cuda.is_available():
+        print(" -> 최적 장치 감지: CUDA (NVIDIA GPU)")
+        return 'cuda'
+    if torch.backends.mps.is_available():
+        print(" -> 최적 장치 감지: MPS (Apple Silicon GPU)")
+        return 'mps'
+    print(" -> 최적 장치 감지: CPU")
+    return 'cpu'
+
+DEVICE = get_optimal_device()
+
+print(f"전역 임베딩 모델로 HuggingFace 모델(Granite-Embedding-278m)을 생성합니다. (사용 장치: {DEVICE.upper()})")
 EMBEDDINGS = HuggingFaceEmbeddings(
     model_name="ibm-granite/granite-embedding-278m-multilingual",
-    model_kwargs={'device': 'cuda'},  # [수정] GPU를 사용하도록 'cuda'로 변경
+    model_kwargs={'device': DEVICE}, # 하드코딩된 'cuda' 대신 자동 감지된 DEVICE 변수 사용
     encode_kwargs={'normalize_embeddings': True}
 )
 

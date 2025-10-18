@@ -4,7 +4,7 @@ import os
 from datetime import datetime
 import time
 import itertools
-from langchain.prompts import ChatPromptTemplate
+from langchain_core.prompts import ChatPromptTemplate
 from ddgs import DDGS
 
 # [핵심] 분리된 모듈에서 프롬프트와 LLM 핸들러를 가져옵니다.
