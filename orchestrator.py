@@ -6,10 +6,13 @@ import time
 import itertools
 from langchain_core.prompts import ChatPromptTemplate
 from ddgs import DDGS
+from langchain.chains.query_constructor.base import AttributeInfo
+from langchain.retrievers.self_query.base import SelfQueryRetriever
+from langchain_core.output_parsers import StrOutputParser
 
 # [핵심] 분리된 모듈에서 프롬프트와 LLM 핸들러를 가져옵니다.
 from prompts import *
-from llm_handler import invoke_with_fallback, ALL_LLMS # ALL_LLMS 임포트
+from llm_handler import invoke_with_fallback, ALL_LLMS, llm_gemini_flash_normal # ALL_LLMS 임포트
 from config import NORMAL_MODELS_FALLBACK_ORDER, STREAM_MODELS_FALLBACK_ORDER # config에서 목록 임포트
 
 
@@ -30,6 +33,41 @@ evaluation_prompt = ChatPromptTemplate.from_template(EVALUATION_PROMPT_TEMPLATE)
 synthesis_prompt = ChatPromptTemplate.from_template(SYNTHESIS_PROMPT_TEMPLATE)
 
 
+# SelfQueryRetriever가 사용할 메타데이터 필드 정보를 정의합니다.
+# data_loader.py의 parse_metadata_from_path 함수를 참고하여 작성합니다.
+metadata_field_info = [
+    AttributeInfo(
+        name="doc_type",
+        description="문서의 유형. 예: '기업 분석', '기술 트렌드', '이력서', '자기소개서'",
+        type="string",
+    ),
+    AttributeInfo(
+        name="company",
+        description="문서와 관련된 회사 이름. 예: '삼성전자', '현대자동차'",
+        type="string",
+    ),
+    AttributeInfo(
+        name="status",
+        description="지원 결과 상태. 예: '최종 합격', '서류 합격', '불합격'",
+        type="string",
+    ),
+]
+document_content_description = "취업 지원과 관련된 다양한 문서 내용"
+
+
+query_expansion_prompt_template = """
+당신은 최고의 검색 전문가입니다.
+사용자의 [원본 질문]을 바탕으로, 검색 엔진에서 더 풍부하고 관련성 높은 결과를 찾기 위한 3가지의 대체 질문을 생성해주세요.
+각 질문은 한 줄로 구분해야 합니다. 다른 설명은 붙이지 마세요.
+
+[원본 질문]
+{original_query}
+
+[대체 질문]
+"""
+query_expansion_prompt = ChatPromptTemplate.from_template(query_expansion_prompt_template)
+
+
 # --- 메인 오케스트레이터 함수 ---
 def generate_report_and_feedback(vector_store, jd_text, draft_text, company_name, job_title):
     """
@@ -46,9 +84,36 @@ def generate_report_and_feedback(vector_store, jd_text, draft_text, company_name
     try:
         # --- 1단계: 내부 데이터(RAG) 수집 ---
         yield {"report": "### ⏳ 1/4: 관련 내부 자료 검색 중...", "feedback": "", "done": False}
-        retriever = vector_store.as_retriever(search_kwargs={'k': 7})
-        retrieval_query = f"{company_name} {job_title} 직무 지원"
-        relevant_docs = retriever.invoke(retrieval_query)
+        
+        # [수정] SelfQueryRetriever를 생성합니다.
+        retriever = SelfQueryRetriever.from_llm(
+            llm=llm_gemini_flash_normal, # LLM이 쿼리를 분석하여 필터를 생성
+            vectorstore=vector_store,
+            document_contents=document_content_description,
+            metadata_field_info=metadata_field_info,
+            verbose=True # 어떤 필터가 생성되는지 터미널에서 확인 가능
+        )
+
+        original_query = f"{company_name} {job_title} 직무 지원 관련 정보"
+
+        # [추가] 쿼리 확장 로직
+        print(" -> 쿼리 확장 시도...")
+        query_expansion_chain = query_expansion_prompt | llm_gemini_flash_normal | StrOutputParser()
+        expanded_queries_str = query_expansion_chain.invoke({"original_query": original_query})
+        all_queries = [original_query] + expanded_queries_str.strip().split('\n')
+        print(f" -> 생성된 쿼리: {all_queries}")
+
+        # [수정] 확장된 모든 쿼리로 문서를 검색하고 중복을 제거합니다.
+        relevant_docs_set = {}
+        for query in all_queries:
+            docs = retriever.invoke(query) # retriever는 SelfQueryRetriever 또는 일반 retriever
+            for doc in docs:
+                # 소스 경로를 키로 사용하여 중복 문서 방지
+                relevant_docs_set[doc.metadata['source']] = doc
+        
+        relevant_docs = list(relevant_docs_set.values())
+        print(f" -> 최종적으로 {len(relevant_docs)}개의 고유한 문서를 찾았습니다.")
+
         context_text = "\n\n---\n\n".join([doc.page_content for doc in relevant_docs])
     except Exception as e:
         yield {"report": f"### ❌ 오류 (1단계: 내부 자료 검색)\n\n{e}", "feedback": "", "done": True}
